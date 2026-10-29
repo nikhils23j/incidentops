@@ -1,0 +1,34 @@
+:root { font: 16px/1.45 Inter, system-ui, sans-serif; color: #172633; background: #f3f7fa; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1180px; margin: auto; padding: 32px 24px 64px; }
+header, .panel-head, .incident-top, .incident-foot { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+h1 { font-size: 2.6rem; letter-spacing: -.04em; margin: 0; }
+h2 { font-size: 1.25rem; margin: 0 0 18px; }
+p { margin: 8px 0; }
+.eyebrow { color: #087c84; font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.sub, small { color: #5f6e79; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 26px 0; }
+.stat, .panel { background: white; border: 1px solid #dce6ec; border-radius: 14px; box-shadow: 0 4px 18px #183c5410; }
+.stat { padding: 18px 20px; display: grid; }
+.stat strong { font-size: 2rem; }
+.stat span { color: #62737d; font-size: .72rem; font-weight: 700; letter-spacing: .1em; }
+.layout { display: grid; grid-template-columns: 1.65fr 1fr; gap: 20px; align-items: start; }
+.panel { padding: 22px; }
+.incidents { list-style: none; padding: 0; margin: 0; }
+.incidents li { border-top: 1px solid #e6edf1; padding: 16px 0; }
+.incidents li:first-child { border-top: 0; }
+.incident-foot { margin-top: 12px; }
+.badge { border-radius: 99px; background: #e9eef2; padding: 4px 10px; font-size: .68rem; font-weight: 800; }
+.badge.high, .badge.critical { color: #a52b30; background: #ffebed; }
+.badge.medium { color: #935900; background: #fff1d6; }
+.badge.low { color: #1f6c55; background: #dcf7e9; }
+button { border: 0; border-radius: 8px; color: white; background: #087c84; padding: 10px 14px; font: inherit; font-weight: 650; cursor: pointer; }
+button:disabled { opacity: .55; cursor: wait; }
+button.secondary { color: #087c84; background: white; border: 1px solid #9dbdc1; }
+input, textarea, select { border: 1px solid #bfccd3; border-radius: 8px; padding: 10px; font: inherit; background: white; }
+.form label { display: grid; gap: 6px; margin: 14px 0; font-size: .9rem; font-weight: 600; }
+.form textarea { min-height: 100px; resize: vertical; }
+.error { color: #a52b30; background: #ffebed; padding: 10px 12px; border-radius: 8px; }
+.empty { color: #6d7c85; padding: 20px 0; }
+@media (max-width: 750px) { .layout { grid-template-columns: 1fr; } .stats { gap: 8px; } main { padding: 20px 12px; } .stat { padding: 12px; } }
