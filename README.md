@@ -269,8 +269,7 @@ There is no CI pipeline in this repo; these are run by hand.
 │   ├── loadcheck.py                 latency + race check (stdlib only)
 │   └── make_figures.py              README charts, reads only results.json
 ├── docs/img/                        charts + dashboard screenshot
-├── results.json                     every number in this README, with commands
-└── INTERVIEW_NOTES.md               notes for explaining this project
+└── results.json                     every number in this README, with commands
 ```
 
 ## What this isn't / limits
@@ -286,9 +285,8 @@ There is no CI pipeline in this repo; these are run by hand.
 
 ## More
 
-- [`INTERVIEW_NOTES.md`](INTERVIEW_NOTES.md): how I'd explain the design, the trade-offs (optimistic vs pessimistic locking, SSE vs WebSockets), and the questions I expect.
 - [`results.json`](results.json): raw numbers, environment and exact commands.
 
-## How it was built
+## Reproducibility
 
-Built as a personal learning project with AI pair-programming help (design discussion, code and tests). I ran every number in this README myself and checked it against the logs in `results.json`.
+I ran every number in this README and checked it against the logs in `results.json`.
