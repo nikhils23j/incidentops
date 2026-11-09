@@ -1,0 +1,138 @@
+{
+  "generated": "2026-11-09 (Asia/Kolkata), all values below come from runs on this date",
+  "environment": {
+    "machine": "Apple M2, 8 cores, 8 GB RAM, macOS 27.2",
+    "java": "OpenJDK 17.0.20.1 (Zulu)",
+    "maven": "3.10.0 via ./mvnw",
+    "spring_boot": "4.1.2",
+    "hibernate": "7.4.13.Final",
+    "h2": "2.4.240",
+    "node": "22.23.4",
+    "npm": "10.9.9",
+    "vite": "7.3.7",
+    "vitest": "3.2.7",
+    "react": "19.3.1",
+    "python": "3.10.8 (stdlib only, for scripts/loadcheck.py)",
+    "machine_load_note": "Unrelated CPU-heavy processes were running throughout. 1-min load average was 229.66 before the load check and 286.83 after, on 8 cores. Latency tails are inflated by this and should not be read as the app's uncontended performance."
+  },
+  "backend_tests": {
+    "command": "cd n1-server && ./mvnw test",
+    "result": "Tests run: 45, Failures: 0, Errors: 0, Skipped: 0 - BUILD SUCCESS",
+    "wall_time": "46.994 s (Maven 'Total time')",
+    "by_class": {
+      "IncidentApiTests (MockMvc)": 20,
+      "IncidentStateMachineTest (unit, 9 parameterized pairs + 3)": 12,
+      "SlaEscalationTests (MockMvc + fake Clock)": 5,
+      "ConcurrencyAndStreamTests (real Tomcat, random port)": 4,
+      "OnCallRotationTest (unit)": 3,
+      "IncidentopsApplicationTests": 1
+    },
+    "flakiness_check": "./mvnw test -Dtest=ConcurrencyAndStreamTests repeated 5 times: 0 failures",
+    "mutation_check": "With @Version commented out on Incident: 2 of 4 ConcurrencyAndStreamTests failed; in the 8-way ack race 6 of 8 requests returned 200 instead of 1. Restored afterwards."
+  },
+  "frontend": {
+    "build": {
+      "command": "cd n1-web && npm run build",
+      "result": "tsc -b && vite build OK; JS 236.28 kB (73.90 kB gzip), CSS 6.08 kB (1.99 kB gzip)"
+    },
+    "tests": {
+      "command": "cd n1-web && npm test",
+      "result": "Vitest: 3 files, 17 tests passed"
+    },
+    "npm_audit": "3 findings (1 moderate, 2 critical) in vitest 3.2.x's dev-only dependency tree (@vitest/mocker, tinypool); not in the production bundle. The fix is vitest 4, which npm 10.9.9 failed to install here (arborist 'edgesOut' error)."
+  },
+  "live_http_flow": {
+    "command": "java -jar n1-server/target/incidentops-0.0.1-SNAPSHOT.jar --incidentops.ack-sla.CRITICAL=8s --incidentops.sla.scan-interval-ms=1000  then  ./scripts/demo_flow.sh",
+    "checked": [
+      "create 201",
+      "list+search",
+      "OPEN->RESOLVED 409 application/problem+json illegal-transition",
+      "ack with expectedVersion=0 200 (v0->v1)",
+      "stale expectedVersion=0 reassign 409 version-conflict",
+      "comment 201",
+      "resolve without postmortem 422",
+      "resolve with postmortem 200",
+      "timeline CREATED/ACKNOWLEDGED/COMMENTED/RESOLVED",
+      "CRITICAL left unacked was escalated by the scheduler to L1 and reassigned responder-b -> responder-c",
+      "SSE subscriber received hello, 2x incident.created, acknowledged, commented, resolved, escalated"
+    ],
+    "sse_through_vite_proxy": "curl on http://localhost:5173/api/stream received event:incident.commented",
+    "shutdown_with_open_sse_client": {
+      "before_fix": "about 30 s (graceful-shutdown timeout logged: '1 bean still running after timeout of 30000ms: [webServerGracefulShutdown]')",
+      "after_fix_seconds": 0.3
+    }
+  },
+  "load_check": {
+    "command": "python3 -I scripts/loadcheck.py --requests 2000 --concurrency 8 --race-rounds 50",
+    "setup": "Same machine as server (localhost), fresh H2 file DB, default config, after a warm-up of 700 requests. Client-side wall time per request, keep-alive connection per thread.",
+    "rows_in_db_after_load": 2300,
+    "latency": [
+      {
+        "endpoint": "POST /incidents",
+        "requests": 2000,
+        "concurrency": 8,
+        "errors": 0,
+        "p50_ms": 4.05,
+        "p95_ms": 80.66,
+        "p99_ms": 153.09,
+        "max_ms": 239.92,
+        "mean_ms": 15.36,
+        "throughput_rps": 512.0
+      },
+      {
+        "endpoint": "PATCH /incidents/{id}/status (ack)",
+        "requests": 2000,
+        "concurrency": 8,
+        "errors": 0,
+        "p50_ms": 3.87,
+        "p95_ms": 92.22,
+        "p99_ms": 162.91,
+        "max_ms": 311.6,
+        "mean_ms": 16.0,
+        "throughput_rps": 496.2
+      },
+      {
+        "endpoint": "GET /incidents?page=0&size=20",
+        "requests": 2000,
+        "concurrency": 8,
+        "errors": 0,
+        "p50_ms": 3.53,
+        "p95_ms": 71.83,
+        "p99_ms": 149.62,
+        "max_ms": 294.86,
+        "mean_ms": 13.59,
+        "throughput_rps": 585.8
+      },
+      {
+        "endpoint": "GET /incidents?q=svc-7&size=20",
+        "requests": 2000,
+        "concurrency": 8,
+        "errors": 0,
+        "p50_ms": 15.62,
+        "p95_ms": 243.52,
+        "p99_ms": 397.16,
+        "max_ms": 555.87,
+        "mean_ms": 54.66,
+        "throughput_rps": 145.7
+      },
+      {
+        "endpoint": "GET /stats",
+        "requests": 2000,
+        "concurrency": 8,
+        "errors": 0,
+        "p50_ms": 64.17,
+        "p95_ms": 222.26,
+        "p99_ms": 350.95,
+        "max_ms": 723.56,
+        "mean_ms": 84.11,
+        "throughput_rps": 94.7
+      }
+    ],
+    "race": {
+      "rounds": 50,
+      "concurrent_acks_per_round": 8,
+      "rounds_with_exactly_one_winner": 50,
+      "max_winners_in_a_round": 1
+    }
+  }
+}

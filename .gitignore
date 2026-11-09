@@ -2,7 +2,6 @@ n1-server/target/
 n1-server/data/
 n1-web/node_modules/
 n1-web/dist/
-
 .DS_Store
 __pycache__/
 *.pyc

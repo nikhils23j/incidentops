@@ -1,140 +1,182 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ApiError, request } from './api'
+import { CreateForm } from './components/CreateForm'
+import { IncidentDetail } from './components/IncidentDetail'
+import { SlaBadge } from './components/SlaBadge'
+import { formatSeconds, timeAgo } from './time'
+import type { Incident, IncidentChanged, Page, Postmortem, Severity, Stats, Status, TimelineEntry } from './types'
+import { useIncidentStream } from './useIncidentStream'
+import { useNow } from './useNow'
 
-type Severity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
-type Status = 'OPEN' | 'ACKNOWLEDGED' | 'RESOLVED'
-type Incident = {
-  id: string
-  serviceName: string
-  severity: Severity
-  status: Status
-  summary: string
-  createdAt: string
-}
-type Metrics = Record<Status, number>
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8080/api'
-
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(API + path, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-  })
-  if (!response.ok) {
-    let message = `Request failed (${response.status})`
-    try { message = (await response.json()).error || message } catch { /* use status */ }
-    throw new Error(message)
-  }
-  return response.json() as Promise<T>
-}
+const PAGE_SIZE = 10
+type Toast = { id: number; text: string; kind: 'info' | 'warn' }
 
 export default function App() {
-  const [incidents, setIncidents] = useState<Incident[]>([])
-  const [metrics, setMetrics] = useState<Metrics>({ OPEN: 0, ACKNOWLEDGED: 0, RESOLVED: 0 })
-  const [filter, setFilter] = useState<Status | 'ALL'>('ALL')
-  const [loading, setLoading] = useState(true)
+  const now = useNow()
+  const [me, setMe] = useState(() => localStorage.getItem('incidentops.me') || 'me')
+  const [page, setPage] = useState<Page<Incident> | null>(null)
+  const [pageNo, setPageNo] = useState(0)
+  const [stats, setStats] = useState<Stats | null>(null)
+  const [rotation, setRotation] = useState<string[]>([])
+  const [status, setStatus] = useState<Status | 'ALL'>('ALL')
+  const [severity, setSeverity] = useState<Severity | 'ALL'>('ALL')
+  const [q, setQ] = useState('')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [timeline, setTimeline] = useState<TimelineEntry[]>([])
   const [error, setError] = useState('')
-  const [serviceName, setServiceName] = useState('')
-  const [summary, setSummary] = useState('')
-  const [severity, setSeverity] = useState<Severity>('MEDIUM')
-  const [saving, setSaving] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [toasts, setToasts] = useState<Toast[]>([])
+  const toastId = useRef(0)
+
+  useEffect(() => { localStorage.setItem('incidentops.me', me) }, [me])
+
+  const toast = useCallback((text: string, kind: Toast['kind'] = 'info') => {
+    const id = ++toastId.current
+    setToasts(t => [...t.slice(-3), { id, text, kind }])
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 5000)
+  }, [])
 
   const refresh = useCallback(async () => {
+    const params = new URLSearchParams({ page: String(pageNo), size: String(PAGE_SIZE) })
+    if (status !== 'ALL') params.set('status', status)
+    if (severity !== 'ALL') params.set('severity', severity)
+    if (q.trim()) params.set('q', q.trim())
     try {
+      const [rows, s] = await Promise.all([
+        request<Page<Incident>>('/incidents?' + params), request<Stats>('/stats')])
+      setPage(rows)
+      setStats(s)
       setError('')
-      const [rows, counts] = await Promise.all([
-        request<Incident[]>(`/incidents${filter === 'ALL' ? '' : '?status=' + filter}`),
-        request<Metrics>('/metrics'),
-      ])
-      setIncidents(rows)
-      setMetrics(counts)
     } catch (e) { setError((e as Error).message) }
-    finally { setLoading(false) }
-  }, [filter])
+  }, [pageNo, status, severity, q])
 
-  useEffect(() => { void refresh() }, [refresh])
+  const loadTimeline = useCallback(async (id: string) => {
+    try { setTimeline(await request<TimelineEntry[]>(`/incidents/${id}/events`)) }
+    catch (e) { setError((e as Error).message) }
+  }, [])
 
-  async function create(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setSaving(true)
+  useEffect(() => { const t = setTimeout(() => void refresh(), 200); return () => clearTimeout(t) }, [refresh])
+  useEffect(() => { void request<{ rotation: string[] }>('/oncall').then(r => setRotation(r.rotation)).catch(() => {}) }, [])
+  useEffect(() => { if (selectedId) void loadTimeline(selectedId); else setTimeline([]) }, [selectedId, loadTimeline])
+
+  const selected = page?.items.find(i => i.id === selectedId) ?? null
+  const [detail, setDetail] = useState<Incident | null>(null)
+  useEffect(() => { if (selected) setDetail(selected) }, [selected])
+  useEffect(() => {
+    if (selectedId && !selected) void request<Incident>(`/incidents/${selectedId}`).then(setDetail).catch(() => {})
+    if (!selectedId) setDetail(null)
+  }, [selectedId, selected])
+
+  // Live updates from other people / the SLA bot.
+  const live = useIncidentStream(useCallback((c: IncidentChanged) => {
+    void refresh()
+    if (c.incident.id === selectedId) { setDetail(c.incident); void loadTimeline(c.incident.id) }
+    if (c.event.actor !== me) {
+      toast(`${c.event.actor} · ${c.event.type.toLowerCase()} · ${c.incident.serviceName}`,
+        c.event.type === 'ESCALATED' ? 'warn' : 'info')
+    }
+  }, [refresh, loadTimeline, selectedId, me, toast]))
+
+  async function mutate(fn: () => Promise<unknown>) {
+    setBusy(true)
     try {
-      await request<Incident>('/incidents', {
-        method: 'POST',
-        body: JSON.stringify({ serviceName, summary, severity }),
-      })
-      setServiceName('')
-      setSummary('')
+      await fn()
+      setError('')
+    } catch (e) {
+      if (e instanceof ApiError && e.isVersionConflict) {
+        toast('Someone else changed this incident first. Showing the latest version.', 'warn')
+      } else setError((e as Error).message)
+    } finally {
+      setBusy(false)
       await refresh()
-    } catch (e) { setError((e as Error).message) }
-    finally { setSaving(false) }
+      if (selectedId) await loadTimeline(selectedId)
+    }
   }
 
-  async function advance(incident: Incident) {
-    const status: Status = incident.status === 'OPEN' ? 'ACKNOWLEDGED' : 'RESOLVED'
+  const changeStatus = (i: Incident, next: Status, postmortem?: Postmortem) => mutate(() =>
+    request(`/incidents/${i.id}/status`, { method: 'PATCH',
+      body: JSON.stringify({ status: next, expectedVersion: i.version, actor: me, postmortem }) }))
+
+  async function create(input: { serviceName: string; severity: Severity; summary: string }) {
     try {
-      await request<Incident>(`/incidents/${incident.id}/status`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status }),
-      })
+      const created = await request<Incident>('/incidents', { method: 'POST', body: JSON.stringify({ ...input, reporter: me }) })
+      setSelectedId(created.id)
       await refresh()
-    } catch (e) { setError((e as Error).message) }
+      return true
+    } catch (e) { setError((e as Error).message); return false }
   }
 
   return <main>
     <header>
       <div>
-        <p className="eyebrow">Operational reliability</p>
-        <h1>IncidentOps</h1>
-        <p className="sub">Track service incidents from detection through resolution.</p>
+        <p className="eyebrow">IncidentOps</p>
+        <h1>What's on fire?</h1>
       </div>
-      <button className="secondary" onClick={() => void refresh()}>Refresh</button>
+      <div className="whoami">
+        <span className={`live live-${live}`} title="Server-Sent Events connection">{live === 'live' ? 'Live' : live}</span>
+        <label>You are <input aria-label="Your name" value={me} maxLength={60} onChange={e => setMe(e.target.value || 'me')} /></label>
+      </div>
     </header>
 
-    <section className="stats" aria-label="Incident counts">
-      {(['OPEN', 'ACKNOWLEDGED', 'RESOLVED'] as const).map(status =>
-        <div className="stat" key={status}><strong>{metrics[status]}</strong><span>{status}</span></div>
-      )}
+    <section className="stats" aria-label="Stats">
+      <div className="stat"><strong>{stats?.byStatus.OPEN ?? '—'}</strong><span>Open</span></div>
+      <div className="stat"><strong>{stats?.byStatus.ACKNOWLEDGED ?? '—'}</strong><span>Acknowledged</span></div>
+      <div className={`stat ${stats?.slaBreachedOpen ? 'hot' : ''}`}><strong>{stats?.slaBreachedOpen ?? '—'}</strong><span>SLA breached</span></div>
+      <div className="stat"><strong>{formatSeconds(stats?.mttaMeanSeconds ?? null)}</strong><span>MTTA (n={stats?.sampleAcknowledged ?? 0})</span></div>
+      <div className="stat"><strong>{formatSeconds(stats?.mttrMeanSeconds ?? null)}</strong><span>MTTR (n={stats?.sampleResolved ?? 0})</span></div>
     </section>
 
-    <section className="layout">
+    {error && <p role="alert" className="error">{error} <button className="ghost" onClick={() => setError('')}>dismiss</button></p>}
+
+    <section className={`layout ${detail ? 'with-detail' : ''}`}>
       <div className="panel">
-        <div className="panel-head">
-          <h2>Incidents</h2>
-          <select aria-label="Filter by status" value={filter}
-            onChange={e => setFilter(e.target.value as Status | 'ALL')}>
-            <option value="ALL">All statuses</option>
-            <option value="OPEN">Open</option>
-            <option value="ACKNOWLEDGED">Acknowledged</option>
-            <option value="RESOLVED">Resolved</option>
+        <div className="filters">
+          <input type="search" aria-label="Search" placeholder="Search service or summary…" value={q}
+            onChange={e => { setQ(e.target.value); setPageNo(0) }} />
+          <select aria-label="Filter by status" value={status} onChange={e => { setStatus(e.target.value as Status | 'ALL'); setPageNo(0) }}>
+            <option value="ALL">All statuses</option><option>OPEN</option><option>ACKNOWLEDGED</option><option>RESOLVED</option>
+          </select>
+          <select aria-label="Filter by severity" value={severity} onChange={e => { setSeverity(e.target.value as Severity | 'ALL'); setPageNo(0) }}>
+            <option value="ALL">All severities</option><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option>
           </select>
         </div>
-        {error && <p role="alert" className="error">{error}</p>}
-        {loading ? <p>Loading incidents…</p> : incidents.length === 0 ?
-          <p className="empty">No incidents match this filter.</p> :
+        {!page ? <p>Loading…</p> : page.items.length === 0 ? <p className="empty">Nothing matches. Quiet day?</p> :
           <ul className="incidents">
-            {incidents.map(i => <li key={i.id}>
-              <div className="incident-top"><strong>{i.serviceName}</strong>
-                <span className={`badge ${i.severity.toLowerCase()}`}>{i.severity}</span></div>
-              <p>{i.summary}</p>
-              <div className="incident-foot">
-                <small>{i.status} · {new Date(i.createdAt).toLocaleString()}</small>
-                {i.status !== 'RESOLVED' && <button onClick={() => void advance(i)}>
-                  {i.status === 'OPEN' ? 'Acknowledge' : 'Resolve'}
-                </button>}
-              </div>
+            {page.items.map(i => <li key={i.id} className={i.id === selectedId ? 'selected' : ''}>
+              <button className="row-btn" onClick={() => setSelectedId(i.id === selectedId ? null : i.id)}>
+                <div className="incident-top">
+                  <strong>{i.serviceName}</strong>
+                  <span className={`badge ${i.severity.toLowerCase()}`}>{i.severity}</span>
+                </div>
+                <p>{i.summary}</p>
+                <div className="incident-foot">
+                  <span className={`pill st-${i.status.toLowerCase()}`}>{i.status}</span>
+                  <SlaBadge incident={i} now={now} />
+                  <small>{i.assignee} · {timeAgo(i.createdAt, now)}</small>
+                </div>
+              </button>
             </li>)}
           </ul>}
+        {page && page.totalPages > 1 && <div className="pager">
+          <button className="secondary" disabled={pageNo === 0} onClick={() => setPageNo(pageNo - 1)}>← Newer</button>
+          <small>Page {page.page + 1} of {page.totalPages} · {page.totalElements} incidents</small>
+          <button className="secondary" disabled={pageNo + 1 >= page.totalPages} onClick={() => setPageNo(pageNo + 1)}>Older →</button>
+        </div>}
       </div>
 
-      <form className="panel form" onSubmit={e => void create(e)}>
-        <h2>Report incident</h2>
-        <label>Service name<input required maxLength={80} value={serviceName}
-          onChange={e => setServiceName(e.target.value)} placeholder="e.g. Order API" /></label>
-        <label>Severity<select value={severity} onChange={e => setSeverity(e.target.value as Severity)}>
-          <option>LOW</option><option>MEDIUM</option><option>HIGH</option><option>CRITICAL</option>
-        </select></label>
-        <label>Summary<textarea required maxLength={240} value={summary}
-          onChange={e => setSummary(e.target.value)} placeholder="What happened?" /></label>
-        <button disabled={saving}>{saving ? 'Saving…' : 'Create incident'}</button>
-      </form>
+      {detail ? <IncidentDetail incident={detail} timeline={timeline} rotation={rotation} now={now} busy={busy}
+        onClose={() => setSelectedId(null)}
+        onAck={() => void changeStatus(detail, 'ACKNOWLEDGED')}
+        onResolve={pm => void changeStatus(detail, 'RESOLVED', pm)}
+        onReassign={a => void mutate(() => request(`/incidents/${detail.id}/assignee`, { method: 'PATCH',
+          body: JSON.stringify({ assignee: a, expectedVersion: detail.version, actor: me }) }))}
+        onComment={m => mutate(() => request(`/incidents/${detail.id}/comments`, { method: 'POST',
+          body: JSON.stringify({ author: me, message: m }) }))}
+      /> : <CreateForm onCreate={create} />}
     </section>
+
+    <div className="toasts" aria-live="polite">
+      {toasts.map(t => <div key={t.id} className={`toast ${t.kind}`}>{t.text}</div>)}
+    </div>
   </main>
 }
